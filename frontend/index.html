@@ -100,6 +100,7 @@ tailwind.config = { theme: { extend: {
   <button class="tab px-4 py-3 text-sm whitespace-nowrap" data-tab="charts" onclick="showTab('charts')">Charts</button>
   <button class="tab px-4 py-3 text-sm whitespace-nowrap" data-tab="flow" onclick="showTab('flow')">Event Flow</button>
   <button class="tab px-4 py-3 text-sm whitespace-nowrap" data-tab="ops" onclick="showTab('ops')">Ops & Tracking</button>
+  <button class="tab px-4 py-3 text-sm whitespace-nowrap" data-tab="monitor" onclick="showTab('monitor')">Monitoring</button>
 </nav>
 
 <main class="max-w-7xl mx-auto px-4 py-6">
@@ -206,6 +207,66 @@ tailwind.config = { theme: { extend: {
   </div>
 </section>
 
+<!-- ===== MONITORING TAB ===== -->
+<section id="tab-monitor" class="tabpane hidden">
+  <!-- message tracker -->
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+    <div class="panel p-4 rounded"><div class="text-xs mono" style="color:var(--text-soft)">MESSAGES SENT</div><div id="mSent" class="text-2xl font-semibold mt-1" style="color:var(--blue)">0</div></div>
+    <div class="panel p-4 rounded"><div class="text-xs mono" style="color:var(--text-soft)">MESSAGES RECEIVED</div><div id="mRecv" class="text-2xl font-semibold mt-1" style="color:var(--green)">0</div></div>
+    <div class="panel p-4 rounded"><div class="text-xs mono" style="color:var(--text-soft)">IN FLIGHT (sent−recv)</div><div id="mFlight" class="text-2xl font-semibold mt-1">0</div></div>
+    <div class="panel p-4 rounded"><div class="text-xs mono" style="color:var(--text-soft)">API UPTIME</div><div id="mUptime" class="text-2xl font-semibold mt-1">0s</div></div>
+  </div>
+
+  <div class="grid md:grid-cols-2 gap-4">
+    <!-- per-topic sent/received -->
+    <div class="panel rounded overflow-x-auto">
+      <div class="flex items-center justify-between p-3" style="border-bottom:1px solid var(--border)">
+        <h3 class="font-semibold text-sm">Per-topic message tracker</h3>
+        <button class="text-xs btn-ghost px-2 py-0.5 rounded" onclick="openModal('monitor')">?</button>
+      </div>
+      <table class="w-full text-sm">
+        <thead><tr class="text-left mono text-xs" style="color:var(--text-soft)">
+          <th class="p-2 pl-3">Topic</th><th class="p-2 text-right">Sent</th>
+          <th class="p-2 text-right">Recv</th><th class="p-2 text-right">Δ</th></tr></thead>
+        <tbody id="topicTrack"></tbody>
+      </table>
+    </div>
+    <!-- recent message feed -->
+    <div class="panel rounded">
+      <h3 class="font-semibold text-sm p-3" style="border-bottom:1px solid var(--border)">Recent message feed</h3>
+      <div id="msgFeed" class="mono text-xs p-3 space-y-1 max-h-72 overflow-y-auto"></div>
+    </div>
+  </div>
+
+  <!-- log viewer -->
+  <div class="panel rounded mt-4">
+    <div class="flex items-center justify-between p-3 flex-wrap gap-2" style="border-bottom:1px solid var(--border)">
+      <h3 class="font-semibold text-sm">Application logs</h3>
+      <div class="flex items-center gap-2">
+        <select id="logLevel" class="px-2 py-1 rounded text-xs" onchange="loadLogs()">
+          <option value="ALL">All levels</option><option value="INFO">INFO</option>
+          <option value="WARNING">WARNING</option><option value="ERROR">ERROR</option>
+        </select>
+        <button class="btn-ghost px-2 py-1 rounded text-xs" onclick="loadLogs()">Refresh</button>
+        <label class="text-xs flex items-center gap-1"><input type="checkbox" id="logAuto" checked> auto</label>
+      </div>
+    </div>
+    <div id="logView" class="mono text-xs p-3 space-y-0.5 max-h-80 overflow-y-auto" style="background:var(--bg-alt)"></div>
+  </div>
+
+  <!-- dashboards -->
+  <div class="panel p-4 rounded mt-4">
+    <h3 class="font-semibold text-sm mb-2">Grafana &amp; Prometheus</h3>
+    <p class="text-xs mb-3" style="color:var(--text-soft)">Broker metrics (via kafka-exporter), message rates, publish latency, and consumer lag are charted in Grafana. The API exposes app counters at <span class="mono">/metrics</span>.</p>
+    <div class="flex gap-2 flex-wrap">
+      <a class="btn px-3 py-2 rounded text-sm" target="_blank" href="http://localhost:3000/d/freshchain-main">Open Grafana dashboard ↗</a>
+      <a class="btn-ghost px-3 py-2 rounded text-sm" target="_blank" href="http://localhost:9090/targets">Prometheus targets ↗</a>
+      <a class="btn-ghost px-3 py-2 rounded text-sm" target="_blank" href="/metrics">Raw /metrics ↗</a>
+    </div>
+    <p class="text-xs mt-2" style="color:var(--text-soft)">Grafana login: <span class="mono">admin / admin</span>. Dashboard auto-provisioned as "FreshChain — Kafka &amp; Messages".</p>
+  </div>
+</section>
+
 </main>
 
 <footer class="max-w-7xl mx-auto px-4 py-6 text-xs mono" style="color:var(--text-soft)">
@@ -251,6 +312,7 @@ function showTab(name){
   document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.tab===name));
   if(name==='charts') renderCharts();
   if(name==='flow') renderFlow();
+  if(name==='monitor'){ loadMetrics(); loadLogs(); }
 }
 
 // ---------------- modal content ----------------
@@ -262,6 +324,11 @@ const MODALS = {
   sales:{t:'Sales → Inventory', b:`<p>A <span class="mono">sale</span> event on <span class="mono">grocery.sales</span> decrements inventory, books revenue and profit, then emits a <span class="mono">stock_check</span>. If stock falls below the reorder point a <span class="mono">reorder_request</span> is published downstream.</p>`},
   employee:{t:'Employee & Register', b:`<p>Clock-in/out events on <span class="mono">grocery.employee</span> record who controls each register, which the owner domain uses for sales attribution.</p>`},
   shelf:{t:'Shelf Placement', b:`<p>Placement events on <span class="mono">grocery.shelf</span> update the physical aisle code. Deliveries auto-emit a placement when restocked.</p>`},
+  monitor:{t:'Message tracking & monitoring', b:`<p>The API counts every message it <b>produces</b> and <b>consumes</b>, per topic, and exposes them at <span class="mono">/metrics</span> for Prometheus.</p>
+    <p><b>Sent</b> = produced by the API. <b>Recv</b> = read back by the consumer. The <b>Δ</b> column and "in flight" stat show sent minus received — transient differences are normal while messages are mid-pipeline.</p>
+    <p>Grafana charts the rates, publish latency and consumer-group lag (via kafka-exporter). Refs:
+    <a class="underline" style="color:var(--blue)" target="_blank" href="https://prometheus.io/docs/introduction/overview/">Prometheus</a>,
+    <a class="underline" style="color:var(--blue)" target="_blank" href="https://grafana.com/docs/">Grafana</a>.</p>`},
 };
 function openModal(k){ const m=MODALS[k]; document.getElementById('modalTitle').textContent=m.t;
   document.getElementById('modalBody').innerHTML=m.b;
@@ -393,9 +460,46 @@ function renderFlow(){
     `<div><span style="color:var(--blue)">${f.from}→${f.to}</span> <span style="color:var(--text-soft)">${f.label}</span></div>`).join('') || '<div style="color:var(--text-soft)">no events yet — try a sale</div>'; }
 }
 
+// ---------------- monitoring ----------------
+const TOPIC_COLOR=t=>{ const h=[...t].reduce((a,c)=>a+c.charCodeAt(0),0)%360; return `hsl(${h},70%,55%)`; };
+async function loadMetrics(){
+  let m; try{ m=await fetch(API+'/api/metrics').then(r=>r.json()); }catch(e){ return; }
+  document.getElementById('mSent').textContent=m.total_sent;
+  document.getElementById('mRecv').textContent=m.total_received;
+  document.getElementById('mFlight').textContent=Math.max(0, m.total_sent-m.total_received);
+  document.getElementById('mUptime').textContent=Math.round(m.uptime_s)+'s';
+  document.getElementById('topicTrack').innerHTML = m.per_topic.length? m.per_topic.map(t=>{
+    const d=t.sent-t.received;
+    return `<tr style="border-top:1px solid var(--border)">
+      <td class="p-2 pl-3"><span style="color:${TOPIC_COLOR(t.topic)}">●</span> <span class="mono">${t.topic.replace('grocery.','')}</span></td>
+      <td class="p-2 text-right" style="color:var(--blue)">${t.sent}</td>
+      <td class="p-2 text-right" style="color:var(--green)">${t.received}</td>
+      <td class="p-2 text-right" style="color:${d?'var(--amber)':'var(--text-soft)'}">${d>0?'+':''}${d}</td></tr>`;
+  }).join('') : '<tr><td class="p-3 text-xs" style="color:var(--text-soft)" colspan="4">no messages yet — try a sale</td></tr>';
+  const feed=document.getElementById('msgFeed');
+  feed.innerHTML = m.recent.length? m.recent.map(r=>{
+    const arrow = r.dir==='sent' ? '<span style="color:var(--blue)">▲ sent</span>' : '<span style="color:var(--green)">▼ recv</span>';
+    const time=new Date(r.ts*1000).toLocaleTimeString();
+    return `<div>${arrow} <span class="mono">${r.topic.replace('grocery.','')}</span>${r.key?` <span style="color:var(--text-soft)">key=${r.key}</span>`:''} <span style="color:var(--text-soft)">${time}</span></div>`;
+  }).join('') : '<div style="color:var(--text-soft)">no messages yet</div>';
+}
+async function loadLogs(){
+  const level=document.getElementById('logLevel').value;
+  let data; try{ data=await fetch(API+'/api/logs?level='+level+'&limit=200').then(r=>r.json()); }catch(e){ return; }
+  const colors={ERROR:'var(--red)',WARNING:'var(--amber)',INFO:'var(--text-soft)',DEBUG:'var(--text-soft)'};
+  document.getElementById('logView').innerHTML = data.logs.length? data.logs.map(l=>{
+    const time=new Date(l.ts*1000).toLocaleTimeString();
+    return `<div><span style="color:var(--text-soft)">${time}</span> <span style="color:${colors[l.level]||'var(--text)'};font-weight:600">${l.level}</span> ${l.msg.replace(/</g,'&lt;')}</div>`;
+  }).join('') : '<div style="color:var(--text-soft)">no log entries</div>';
+}
+
 // ---------------- boot ----------------
 (async function(){ await loadCatalog(); await refresh(); checkHealth();
-  setInterval(()=>{refresh();},2500); setInterval(checkHealth,5000); })();
+  setInterval(()=>{refresh();},2500); setInterval(checkHealth,5000);
+  setInterval(()=>{ const t=document.getElementById('tab-monitor');
+    if(t && !t.classList.contains('hidden')){ loadMetrics();
+      if(document.getElementById('logAuto').checked) loadLogs(); } }, 3000);
+})();
 </script>
 </body>
 </html>

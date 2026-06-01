@@ -42,17 +42,28 @@ EC2 via CloudFormation + Ansible, with CLI test suites for both.
                     │   Kafka cluster (KRaft mode)    │
                     │   kafka1 :9092   kafka2 :9094   │
                     │   replication factor = 2        │
-                    └─────────────────────────────────┘
+                    └───────────────┬─────────────────┘
+                                    │
+            ┌───────────────────────┼───────────────────────┐
+            ▼                       ▼                         ▼
+   kafka-exporter :9308      Prometheus :9090          Grafana :3000
+   (broker/lag metrics)   (scrapes API + exporter)   (dashboards)
 ```
 
-* **Two brokers** run in KRaft mode (no ZooKeeper). Topics are created with
+* **Two brokers** run in KRaft mode (no ZooKeeper, official Apache image). Topics are created with
   replication factor 2 and `min.insync.replicas=1`, so the cluster keeps
   serving if a single broker dies.
 * **The API is both producer and consumer.** Endpoints publish events; a
   background thread consumes every topic and folds messages into a single
   in-memory state object the dashboard reads.
-* **Latest images** are used for Kafka (`bitnami/kafka:latest`) and Python
+* **Latest images** are used for Kafka (`apache/kafka:latest`) and Python
   (`python:3.12-slim`).
+* **Observability:** the API exposes Prometheus metrics at `/metrics` (messages
+  produced/consumed per topic, publish latency, errors, revenue/profit gauges).
+  A `kafka-exporter` sidecar adds broker/topic/consumer-lag metrics. Prometheus
+  scrapes both and Grafana charts them on an auto-provisioned dashboard. The web
+  console's **Monitoring** tab shows a live sent/received tracker, message feed,
+  and log viewer directly from the API.
 
 ---
 
@@ -83,7 +94,10 @@ Prerequisites: Docker with the Compose v2 plugin.
 
 ```bash
 ./dev.sh up        # pull latest images, build API, start everything
-# open http://localhost:8000
+# Web UI / API   -> http://localhost:8000
+# Grafana        -> http://localhost:3000  (admin/admin)
+# Prometheus     -> http://localhost:9090
+# kafka-exporter -> http://localhost:9308/metrics
 
 ./dev.sh test      # run the CLI integration suite against localhost
 ./dev.sh failover  # same, plus kills a broker mid-run to prove failover
@@ -100,6 +114,8 @@ eight topics, then starts tailing them. The console shows a green
 ## Service-by-service walkthrough
 
 ### `kafka1` / `kafka2` — the broker cluster
+> Uses the official **`apache/kafka:latest`** image. (Bitnami removed their free public images from Docker Hub in Aug–Sep 2025, so `bitnami/kafka` tags no longer resolve.)
+
 KRaft-mode brokers that are also controllers (combined role), forming a quorum
 of two. Each advertises an **INTERNAL** listener (`:19092`) for container-to-
 container traffic and an **EXTERNAL** listener (`localhost:9092` / `:9094`) so
@@ -129,6 +145,22 @@ until the brokers actually accept connections.
 A single self-contained page (Tailwind via CDN, IBM Plex fonts) served by the
 API. No build step. Polls `/api/state` every 2.5s and `/api/health` every 5s.
 
+### `kafka-exporter` — broker metrics
+A sidecar (`danielqsj/kafka-exporter`) that connects to both brokers over the
+Kafka protocol and exposes broker, topic, and **consumer-group lag** metrics on
+`:9308` for Prometheus. No JMX or agent needed.
+
+### `prometheus` — metrics store
+Scrapes the API's `/metrics` and the kafka-exporter every 5s
+(`monitoring/prometheus/prometheus.yml`). Browse raw targets at
+`http://localhost:9090/targets`.
+
+### `grafana` — dashboards
+Auto-provisioned with a Prometheus datasource and the **"FreshChain — Kafka &
+Messages"** dashboard (`monitoring/grafana/provisioning/`). Login `admin/admin`.
+Panels: Kafka-up, total sent/received, error count, produced/consumed rate per
+topic, publish-latency p95, revenue/profit, consumer-group lag, and inventory.
+
 ---
 
 ## The frontend console
@@ -152,6 +184,52 @@ typography**, with:
 * **Simulated actions** — sell a chosen SKU, fire a burst of 12 random sales,
   clock employees in/out on a register, reassign shelves, and force-deliver
   shipments to complete the loop.
+
+---
+
+## Monitoring & message tracking
+
+Three ways to see status and the flow of messages:
+
+**1. In-app Monitoring tab** (no extra tools). Open the console → **Monitoring**:
+* live **messages-sent / messages-received** totals and an "in flight" delta,
+* a **per-topic tracker** table (sent, received, Δ per topic),
+* a **recent message feed** showing each produce/consume with topic + key,
+* an **application log viewer** with level filter (ALL/INFO/WARNING/ERROR),
+  auto-refresh toggle, and manual refresh,
+* buttons that deep-link to Grafana, Prometheus targets, and raw `/metrics`.
+
+These read `GET /api/metrics` and `GET /api/logs` — both are plain JSON served
+by the API, so the live view works even before Prometheus is up.
+
+**2. Grafana** at `http://localhost:3000` (admin/admin). The **FreshChain —
+Kafka & Messages** dashboard charts produced/consumed rates per topic, publish
+latency p95, error counts, consumer-group lag, and revenue/profit. Refreshes
+every 5s. To watch the flow live, hit **Simulate 12 random sales** in the app
+and watch the rate panels move.
+
+**3. Prometheus** at `http://localhost:9090`. Check `/targets` to confirm both
+the API and kafka-exporter are `UP`, or query directly, e.g.
+`rate(freshchain_messages_sent_total[1m])` or `sum(kafka_consumergroup_lag)`.
+
+### Viewing logs
+
+* **In the UI:** Monitoring tab → Application logs panel (filter by level).
+* **From the CLI:** `./dev.sh logs` tails every container, or
+  `docker compose logs -f api` / `... kafka1` for one service.
+* **On AWS:** `ssh` to the host and `cd /opt/freshchain && docker compose logs -f`.
+
+### Metrics exposed by the API (`/metrics`)
+
+| Metric | Type | Labels | Meaning |
+|--------|------|--------|---------|
+| `freshchain_messages_sent_total` | counter | `topic` | messages produced |
+| `freshchain_messages_received_total` | counter | `topic` | messages consumed |
+| `freshchain_publish_errors_total` | counter | `topic` | failed publishes |
+| `freshchain_publish_seconds` | histogram | `topic` | publish latency |
+| `freshchain_kafka_connected` | gauge | — | 1 = live connection |
+| `freshchain_inventory_qty` | gauge | `sku` | on-hand quantity |
+| `freshchain_revenue_dollars` / `_profit_dollars` | gauge | — | running totals |
 
 ---
 
@@ -253,6 +331,9 @@ deploy/scripts/deploy.sh down    # delete the CloudFormation stack
 | POST | `/api/shelf` | `{sku, shelf}` | reassign shelf location |
 | POST | `/api/deliver` | `{trace}` | mark a shipment delivered (restocks) |
 | POST | `/api/simulate?n=12` | — | fire N random sales |
+| GET | `/api/metrics` | — | live sent/received tracker + recent feed |
+| GET | `/api/logs?level=&limit=` | — | recent application logs (UI viewer) |
+| GET | `/metrics` | — | Prometheus exposition |
 
 `action` is `clock_in` or `clock_out`. Publish endpoints return **503** if the
 cluster is unreachable.
@@ -263,25 +344,31 @@ cluster is unreachable.
 
 ```
 grocery-kafka/
-├── docker-compose.yml          # 2-broker Kafka + API
+├── docker-compose.yml          # 2 Kafka brokers + API + exporter + Prometheus + Grafana
 ├── dev.sh                      # local docker helper (up/test/failover/logs/down)
 ├── .gitlab-ci.yml              # future CI/CD pipeline
 ├── api/
 │   ├── Dockerfile
 │   ├── requirements.txt
 │   ├── domain.py               # topics, catalog, envelope
-│   ├── kafka_gateway.py        # failover-aware producer/consumer/admin
+│   ├── kafka_gateway.py        # failover-aware producer/consumer/admin (instrumented)
 │   ├── store_state.py          # event handlers + cascade + state
-│   └── main.py                 # FastAPI app
+│   ├── metrics.py              # Prometheus metrics + message/log buffers
+│   └── main.py                 # FastAPI app (+ /metrics, /api/metrics, /api/logs)
 ├── frontend/
-│   └── index.html              # IBM Carbon console (dark/light, font scale, SVG)
+│   └── index.html              # IBM Carbon console (dark/light, font scale, SVG, Monitoring tab)
+├── monitoring/
+│   ├── prometheus/prometheus.yml
+│   └── grafana/provisioning/
+│       ├── datasources/prometheus.yml
+│       └── dashboards/{provider.yml, freshchain.json}
 ├── tests/
 │   ├── test_unit.py            # offline logic
-│   ├── test_live_stub.py       # offline HTTP (stubbed broker)
-│   └── test_stack.py           # live integration + failover
+│   ├── test_live_stub.py       # offline HTTP (stubbed broker) + metrics/logs
+│   └── test_stack.py           # live integration + monitoring + failover
 └── deploy/
     ├── .env.example
-    ├── cloudformation/freshchain-host.yaml
+    ├── cloudformation/freshchain-host.yaml   # exposes 8000/3000/9090/9092/9094
     ├── ansible/{site.yml, inventory.ini}
     └── scripts/deploy.sh        # env-driven AWS deployer
 ```
@@ -301,4 +388,3 @@ grocery-kafka/
   protected AWS variables.
 
 Commits then trigger tests automatically; deploys stay one click away.
-"# kafkalearn" 

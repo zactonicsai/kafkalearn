@@ -91,6 +91,55 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # --- observability stack ---------------------------------------------------
+  # kafka-exporter scrapes the brokers over the Kafka protocol and exposes
+  # broker/topic/consumer-group + lag metrics for Prometheus on :9308.
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:latest
+    container_name: fc-kafka-exporter
+    command:
+      - "--kafka.server=kafka1:19092"
+      - "--kafka.server=kafka2:19092"
+    ports:
+      - "9308:9308"
+    depends_on:
+      kafka1:
+        condition: service_healthy
+      kafka2:
+        condition: service_healthy
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: fc-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    depends_on:
+      - api
+      - kafka-exporter
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: fc-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
 volumes:
   kafka1-data:
   kafka2-data:
+  prometheus-data:
+  grafana-data:

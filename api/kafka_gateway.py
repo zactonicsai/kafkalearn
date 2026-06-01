@@ -62,17 +62,24 @@ class KafkaGateway:
             return self._producer
 
     def publish(self, topic: str, payload: dict, key: str | None = None) -> dict:
+        from metrics import tracker, PUBLISH_LATENCY, KAFKA_UP
+        t0 = time.time()
         try:
             prod = self._ensure_producer()
             fut = prod.send(topic, value=payload, key=key)
             meta = fut.get(timeout=8)
             self.connected = True
             self.last_error = None
+            PUBLISH_LATENCY.labels(topic=topic).observe(time.time() - t0)
+            KAFKA_UP.set(1)
+            tracker.on_sent(topic, key)        # count produced message
             return {"topic": meta.topic, "partition": meta.partition,
                     "offset": meta.offset}
         except KafkaError as e:
             self.connected = False
             self.last_error = str(e)
+            KAFKA_UP.set(0)
+            tracker.on_error(topic)
             # drop the dead producer so the next call rebuilds against a live broker
             with self._lock:
                 self._producer = None
@@ -121,6 +128,9 @@ class KafkaGateway:
                         consumer_timeout_ms=1000,
                     )
                     for msg in consumer:
+                        from metrics import tracker
+                        key = msg.key.decode() if msg.key else None
+                        tracker.on_received(msg.topic, key)   # count consumed
                         try:
                             on_message(msg.topic, msg.value)
                         except Exception:

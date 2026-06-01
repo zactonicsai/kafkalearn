@@ -18,7 +18,7 @@ import os
 import random
 import time
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -26,6 +26,8 @@ from pydantic import BaseModel
 
 from domain import CATALOG, CATALOG_BY_SKU, Topic
 from kafka_gateway import gateway
+from metrics import (attach_log_capture, render_metrics, tracker,
+                     INVENTORY_QTY, REVENUE, PROFIT)
 from store_state import store
 
 logging.basicConfig(level=logging.INFO,
@@ -83,6 +85,7 @@ def _evt(event_type: str, topic: str, payload: dict) -> dict:
 # ---- lifecycle -------------------------------------------------------------
 @app.on_event("startup")
 def startup() -> None:
+    attach_log_capture()               # mirror app logs into the UI buffer
     # wire the store's downstream emitter to the kafka gateway
     store.emit = lambda topic, payload, key: _safe_emit(topic, payload, key)
     gateway.ensure_topics()
@@ -113,7 +116,32 @@ def catalog() -> dict:
 
 @app.get("/api/state")
 def state() -> dict:
-    return store.snapshot()
+    snap = store.snapshot()
+    # refresh prometheus gauges from the latest snapshot
+    REVENUE.set(snap["revenue"])
+    PROFIT.set(snap["profit"])
+    for p in snap["products"]:
+        INVENTORY_QTY.labels(sku=p["sku"]).set(p["qty"])
+    return snap
+
+
+@app.get("/api/metrics")
+def app_metrics() -> dict:
+    """Live message tracker for the dashboard (sent/received per topic)."""
+    return tracker.snapshot()
+
+
+@app.get("/api/logs")
+def logs(level: str = "ALL", limit: int = 200) -> dict:
+    """Recent application log lines for the in-dashboard log viewer."""
+    return {"logs": tracker.log_snapshot(level=level, limit=limit)}
+
+
+@app.get("/metrics")
+def prometheus() -> Response:
+    """Prometheus scrape endpoint."""
+    data, content_type = render_metrics()
+    return Response(content=data, media_type=content_type)
 
 
 # ---- event injection -------------------------------------------------------

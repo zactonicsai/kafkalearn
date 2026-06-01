@@ -1,0 +1,25 @@
+# Prometheus scrape configuration for FreshChain.
+# Scrapes two targets:
+#   * the FastAPI app (/metrics) -> app-level produced/consumed counters, latency
+#   * kafka-exporter (:9308)     -> broker/topic/consumer-group + lag metrics
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: freshchain-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["api:8000"]
+        labels:
+          service: api
+
+  - job_name: kafka
+    static_configs:
+      - targets: ["kafka-exporter:9308"]
+        labels:
+          service: kafka
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

@@ -19,7 +19,12 @@ case "${1:-up}" in
     echo "waiting for API health..."
     for i in $(seq 1 40); do
       if curl -fsS http://localhost:8000/api/health 2>/dev/null | grep -q '"kafka_connected":true'; then
-        echo "ready -> http://localhost:8000"; exit 0
+        echo "ready:"
+        echo "  Web UI / API   -> http://localhost:8000"
+        echo "  Grafana        -> http://localhost:3000  (admin/admin)"
+        echo "  Prometheus     -> http://localhost:9090"
+        echo "  kafka-exporter -> http://localhost:9308/metrics"
+        exit 0
       fi
       sleep 5
     done

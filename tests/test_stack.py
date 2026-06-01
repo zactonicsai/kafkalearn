@@ -128,6 +128,22 @@ def test_failover(base: str, broker: str = "fc-kafka1") -> None:
         print(f"  restarted {broker}")
 
 
+def test_monitoring(base: str) -> None:
+    print("\n== Layer 1: monitoring ==")
+    try:
+        st, m = _req(base, "/api/metrics")
+        check("metrics endpoint", st == 200 and "total_sent" in m)
+        check("messages tracked", m["total_sent"] > 0, f"sent={m['total_sent']}")
+        st2, lg = _req(base, "/api/logs?limit=20")
+        check("logs endpoint", st2 == 200 and "logs" in lg)
+        # prometheus exposition
+        import urllib.request as u
+        raw = u.urlopen(base.rstrip("/") + "/metrics", timeout=8).read().decode()
+        check("prometheus /metrics", "freshchain_messages_sent_total" in raw)
+    except Exception as e:
+        check("monitoring reachable", False, str(e))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="http://localhost:8000")
@@ -141,6 +157,7 @@ def main() -> int:
     test_catalog(args.base)
     test_cascade(args.base)
     test_employee(args.base)
+    test_monitoring(args.base)
     if args.failover:
         test_failover(args.base, args.broker)
 

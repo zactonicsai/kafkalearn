@@ -44,6 +44,16 @@ Resources:
           CidrIp: !Ref AppCidr
           Description: Web UI + API
         - IpProtocol: tcp
+          FromPort: 3000
+          ToPort: 3000
+          CidrIp: !Ref AppCidr
+          Description: Grafana
+        - IpProtocol: tcp
+          FromPort: 9090
+          ToPort: 9090
+          CidrIp: !Ref AppCidr
+          Description: Prometheus
+        - IpProtocol: tcp
           FromPort: 9092
           ToPort: 9092
           CidrIp: !Ref AppCidr

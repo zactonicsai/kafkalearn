@@ -25,7 +25,10 @@ class StubGW:
         self._store = None
 
     def publish(self, topic, payload, key=None):
+        from metrics import tracker
+        tracker.on_sent(topic, key)
         if self._store:
+            tracker.on_received(topic, key)
             self._store.handle(topic, payload)
         return {"topic": topic, "partition": 0, "offset": 0}
 
@@ -95,5 +98,19 @@ req("/api/shelf", "POST", {"sku": "MILK-001", "shelf": "Z9-Z"}); time.sleep(0.3)
 _, s = req("/api/state"); chk("shelf moved", next(p["shelf_current"] for p in s["products"] if p["sku"] == "MILK-001") == "Z9-Z")
 print("== simulate ==")
 st, b = req("/api/simulate?n=10", "POST"); chk("simulate burst", st == 200 and b["count"] == 10)
+
+print("== metrics tracker ==")
+_, m = req("/api/metrics"); chk("metrics sent>0", m["total_sent"] > 0, f"sent={m['total_sent']}")
+chk("metrics received>0", m["total_received"] > 0, f"recv={m['total_received']}")
+chk("per-topic populated", len(m["per_topic"]) > 0)
+chk("recent feed", len(m["recent"]) > 0)
+print("== prometheus ==")
+import urllib.request as u
+raw = u.urlopen("http://127.0.0.1:8077/metrics", timeout=8).read().decode()
+chk("prom exposes sent counter", "freshchain_messages_sent_total" in raw)
+chk("prom exposes recv counter", "freshchain_messages_received_total" in raw)
+print("== logs ==")
+_, lg = req("/api/logs?limit=50"); chk("logs present", len(lg["logs"]) > 0, f"n={len(lg['logs'])}")
+
 print(f"\n{ok}/{tot} PASSED")
 sys.exit(0 if ok == tot else 1)
