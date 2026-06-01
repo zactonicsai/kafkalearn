@@ -1,0 +1,101 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  FreshChain demo host. Provisions one Amazon Linux 2023 EC2 instance with a
+  security group exposing SSH (restricted), the web UI/API (8000) and the two
+  Kafka external listeners (9092/9094). Ansible later installs Docker and runs
+  the dev docker-compose stack on this box.
+
+Parameters:
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Existing EC2 key pair for SSH access
+  InstanceType:
+    Type: String
+    Default: t3.large
+    AllowedValues: [t3.medium, t3.large, t3.xlarge, m5.large, m5.xlarge]
+    Description: Kafka + API are memory hungry; t3.large minimum recommended
+  SshCidr:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: CIDR allowed to SSH (lock this down to your IP)
+  AppCidr:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: CIDR allowed to reach the web UI / API on 8000
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+    Description: SSM param that always resolves to the latest AL2023 AMI
+
+Resources:
+  FreshChainSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: FreshChain demo access
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref SshCidr
+          Description: SSH
+        - IpProtocol: tcp
+          FromPort: 8000
+          ToPort: 8000
+          CidrIp: !Ref AppCidr
+          Description: Web UI + API
+        - IpProtocol: tcp
+          FromPort: 9092
+          ToPort: 9092
+          CidrIp: !Ref AppCidr
+          Description: Kafka broker 1 external
+        - IpProtocol: tcp
+          FromPort: 9094
+          ToPort: 9094
+          CidrIp: !Ref AppCidr
+          Description: Kafka broker 2 external
+      Tags:
+        - Key: Project
+          Value: FreshChain
+
+  FreshChainHost:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      SecurityGroupIds:
+        - !Ref FreshChainSG
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 30
+            VolumeType: gp3
+            DeleteOnTermination: true
+      # Minimal bootstrap so Ansible can connect immediately; Ansible does the
+      # heavy lifting (Docker, compose). We only ensure python3 + ssh are ready.
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euxo pipefail
+          dnf update -y
+          dnf install -y python3 python3-pip git
+          echo "freshchain-bootstrap-complete" > /var/log/freshchain-bootstrap.log
+      Tags:
+        - Key: Name
+          Value: freshchain-host
+        - Key: Project
+          Value: FreshChain
+
+Outputs:
+  InstanceId:
+    Value: !Ref FreshChainHost
+  PublicIp:
+    Description: Public IP of the host
+    Value: !GetAtt FreshChainHost.PublicIp
+  PublicDnsName:
+    Value: !GetAtt FreshChainHost.PublicDnsName
+  WebUrl:
+    Description: Open this once Ansible finishes
+    Value: !Sub "http://${FreshChainHost.PublicIp}:8000"
+  SshCommand:
+    Value: !Sub "ssh -i <your-key>.pem ec2-user@${FreshChainHost.PublicIp}"

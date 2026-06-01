@@ -1,0 +1,96 @@
+# FreshChain dev cluster: 2 Kafka brokers (KRaft, no ZooKeeper) + Python API.
+#
+# Uses the OFFICIAL Apache Kafka image (apache/kafka:latest). Bitnami removed
+# their free public images from docker.io/bitnami in Aug-Sep 2025, so we use
+# the Apache-maintained image instead. Replication factor 2 across the two
+# brokers gives failover: kill one broker and producers/consumers keep working.
+#
+#   docker compose up --build
+#   open http://localhost:8000
+#
+services:
+  kafka1:
+    image: apache/kafka:latest
+    container_name: fc-kafka1
+    ports:
+      - "9092:9092"        # external listener for host tools/tests
+    environment:
+      # --- KRaft combined broker+controller ---
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka1:9093,2@kafka2:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      # --- listeners: INTERNAL for container net, EXTERNAL for host ---
+      KAFKA_LISTENERS: INTERNAL://:19092,CONTROLLER://:9093,EXTERNAL://:9092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka1:19092,EXTERNAL://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      # --- durability / failover ---
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 2
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 2
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 2
+      KAFKA_MIN_INSYNC_REPLICAS: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      CLUSTER_ID: freshchain-cluster-0001
+    volumes:
+      - kafka1-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:19092 >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 8s
+      retries: 15
+      start_period: 20s
+    restart: unless-stopped
+
+  kafka2:
+    image: apache/kafka:latest
+    container_name: fc-kafka2
+    ports:
+      - "9094:9092"
+    environment:
+      KAFKA_NODE_ID: 2
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka1:9093,2@kafka2:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENERS: INTERNAL://:19092,CONTROLLER://:9093,EXTERNAL://:9092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka2:19092,EXTERNAL://localhost:9094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 2
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 2
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 2
+      KAFKA_MIN_INSYNC_REPLICAS: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      CLUSTER_ID: freshchain-cluster-0001
+    volumes:
+      - kafka2-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:19092 >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 8s
+      retries: 15
+      start_period: 20s
+    restart: unless-stopped
+
+  api:
+    build: ./api
+    container_name: fc-api
+    ports:
+      - "8000:8000"
+    environment:
+      KAFKA_BOOTSTRAP: "kafka1:19092,kafka2:19092"
+      FRONTEND_DIR: "/app/frontend"
+    volumes:
+      - ./frontend:/app/frontend:ro
+    depends_on:
+      kafka1:
+        condition: service_healthy
+      kafka2:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  kafka1-data:
+  kafka2-data:

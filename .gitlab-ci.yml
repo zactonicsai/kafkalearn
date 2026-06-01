@@ -1,0 +1,76 @@
+# GitLab CI/CD for FreshChain.
+# Future state: commits to GitLab trigger this pipeline. Unit tests run on every
+# push; integration tests run against an ephemeral docker-compose service stack;
+# deploy is manual and runs the AWS deployer using protected CI variables.
+#
+# Required CI/CD variables (Settings > CI/CD > Variables):
+#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION,
+#   KEY_NAME, and a file variable KEY_PEM (the .pem contents).
+
+stages: [lint, test, integration, build, deploy]
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.pip-cache"
+
+cache:
+  paths: [.pip-cache/]
+
+unit-tests:
+  stage: test
+  image: python:3.12-slim
+  before_script:
+    - pip install -r api/requirements.txt
+  script:
+    - python3 tests/test_unit.py
+    - python3 tests/test_live_stub.py
+
+lint:
+  stage: lint
+  image: python:3.12-slim
+  script:
+    - pip install ruff
+    - ruff check api/ tests/ || true   # advisory
+
+integration:
+  stage: integration
+  image: docker:27
+  services: [docker:27-dind]
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+  before_script:
+    - apk add --no-cache python3 py3-pip curl
+  script:
+    - docker compose up -d --build
+    - |
+      for i in $(seq 1 40); do
+        curl -fsS http://docker:8000/api/health | grep -q '"kafka_connected":true' && break
+        sleep 5
+      done
+    - python3 tests/test_stack.py --base http://docker:8000
+  after_script:
+    - docker compose down -v
+
+build-api-image:
+  stage: build
+  image: docker:27
+  services: [docker:27-dind]
+  script:
+    - docker build -t "$CI_REGISTRY_IMAGE/freshchain-api:$CI_COMMIT_SHORT_SHA" ./api
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    - docker push "$CI_REGISTRY_IMAGE/freshchain-api:$CI_COMMIT_SHORT_SHA"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
+deploy-aws:
+  stage: deploy
+  image: python:3.12-slim
+  when: manual
+  before_script:
+    - pip install awscli ansible
+    - cp "$KEY_PEM" /tmp/key.pem && chmod 600 /tmp/key.pem
+    - export KEY_PATH=/tmp/key.pem
+  script:
+    - bash deploy/scripts/deploy.sh up
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'

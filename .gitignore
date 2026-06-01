@@ -1,0 +1,7 @@
+deploy/.env
+deploy/ansible/inventory.ini
+*.pem
+__pycache__/
+*.pyc
+.pip-cache/
+.DS_Store

@@ -1,0 +1,94 @@
+---
+# Configures a fresh Amazon Linux 2023 host to run the FreshChain dev stack.
+# Idempotent: installs Docker + compose plugin, copies the project, brings the
+# 2-broker Kafka cluster + API up with docker compose, and waits for health.
+#
+#   ansible-playbook -i inventory.ini site.yml
+#
+- name: Deploy FreshChain dev stack
+  hosts: freshchain
+  become: true
+  vars:
+    app_dir: /opt/freshchain
+    project_src: "{{ playbook_dir }}/../.."   # repo root relative to this file
+
+  tasks:
+    - name: Update base packages
+      ansible.builtin.dnf:
+        name: "*"
+        state: latest
+        update_only: true
+
+    - name: Install Docker engine
+      ansible.builtin.dnf:
+        name:
+          - docker
+          - git
+          - python3-pip
+        state: present
+
+    - name: Enable and start Docker
+      ansible.builtin.systemd:
+        name: docker
+        enabled: true
+        state: started
+
+    - name: Add ec2-user to docker group
+      ansible.builtin.user:
+        name: ec2-user
+        groups: docker
+        append: true
+
+    - name: Install docker compose v2 plugin
+      ansible.builtin.shell: |
+        set -e
+        mkdir -p /usr/local/lib/docker/cli-plugins
+        ARCH=$(uname -m)
+        curl -sSL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-${ARCH}" \
+          -o /usr/local/lib/docker/cli-plugins/docker-compose
+        chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+      args:
+        creates: /usr/local/lib/docker/cli-plugins/docker-compose
+
+    - name: Create app directory
+      ansible.builtin.file:
+        path: "{{ app_dir }}"
+        state: directory
+        owner: ec2-user
+        mode: "0755"
+
+    - name: Copy project files to host
+      ansible.builtin.copy:
+        src: "{{ project_src }}/"
+        dest: "{{ app_dir }}/"
+        owner: ec2-user
+        mode: "0644"
+        directory_mode: "0755"
+
+    - name: Pull latest images
+      ansible.builtin.command:
+        cmd: docker compose pull
+        chdir: "{{ app_dir }}"
+      register: pull_out
+      retries: 3
+      delay: 10
+      until: pull_out.rc == 0
+
+    - name: Bring up the stack (build API, start brokers)
+      ansible.builtin.command:
+        cmd: docker compose up -d --build
+        chdir: "{{ app_dir }}"
+
+    - name: Wait for API health endpoint
+      ansible.builtin.uri:
+        url: http://localhost:8000/api/health
+        status_code: 200
+        return_content: true
+      register: health
+      retries: 30
+      delay: 10
+      until: health.status == 200 and (health.json.kafka_connected | default(false))
+
+    - name: Show health result
+      ansible.builtin.debug:
+        msg: "FreshChain healthy: {{ health.json }}"

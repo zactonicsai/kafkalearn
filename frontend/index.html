@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FreshChain — Grocery Event Streaming Console</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Serif:wght@400;600&display=swap" rel="stylesheet">
+<script>
+tailwind.config = { theme: { extend: {
+  fontFamily: { sans: ['"IBM Plex Sans"','sans-serif'], mono: ['"IBM Plex Mono"','monospace'], serif: ['"IBM Plex Serif"','serif'] }
+}}};
+</script>
+<style>
+  /* IBM Carbon-inspired palette. White ground, IBM blue 60 (#0f62fe), near-black text. */
+  :root{
+    --bg:#ffffff; --bg-alt:#f4f4f4; --panel:#ffffff; --border:#e0e0e0;
+    --text:#161616; --text-soft:#525252; --blue:#0f62fe; --blue-dark:#0043ce;
+    --black:#161616; --green:#24a148; --amber:#f1c21b; --red:#da1e28;
+    --grid:#e8e8e8; --shadow:0 2px 6px rgba(0,0,0,.08);
+  }
+  [data-theme="dark"]{
+    --bg:#161616; --bg-alt:#262626; --panel:#262626; --border:#393939;
+    --text:#f4f4f4; --text-soft:#c6c6c6; --blue:#78a9ff; --blue-dark:#4589ff;
+    --black:#f4f4f4; --green:#42be65; --amber:#f1c21b; --red:#fa4d56;
+    --grid:#393939; --shadow:0 2px 8px rgba(0,0,0,.4);
+  }
+  html{ font-size: 16px; } /* JS scales this 14–36 */
+  body{ background:var(--bg); color:var(--text); font-family:"IBM Plex Sans",sans-serif;
+        transition:background .25s, color .25s; }
+  .panel{ background:var(--panel); border:1px solid var(--border); box-shadow:var(--shadow); }
+  .bar{ background:var(--blue); transition:height .5s cubic-bezier(.2,.8,.2,1); }
+  .mono{ font-family:"IBM Plex Mono",monospace; }
+  .accent-line{ background:var(--blue); }
+  .btn{ background:var(--blue); color:#fff; transition:background .15s, transform .05s; }
+  .btn:hover{ background:var(--blue-dark); }
+  .btn:active{ transform:translateY(1px); }
+  .btn-ghost{ background:transparent; color:var(--blue); border:1px solid var(--border); }
+  .btn-ghost:hover{ background:var(--bg-alt); }
+  input,select{ background:var(--bg); color:var(--text); border:1px solid var(--border); }
+  .tab.active{ border-bottom:3px solid var(--blue); color:var(--text); }
+  .tab{ border-bottom:3px solid transparent; color:var(--text-soft); }
+  .pill-ok{ background:color-mix(in srgb,var(--green) 18%,transparent); color:var(--green); }
+  .pill-low{ background:color-mix(in srgb,var(--amber) 22%,transparent); color:#8a6d00; }
+  [data-theme="dark"] .pill-low{ color:var(--amber); }
+  .pill-out{ background:color-mix(in srgb,var(--red) 18%,transparent); color:var(--red); }
+  .flow-node{ fill:var(--panel); stroke:var(--border); }
+  .flow-text{ fill:var(--text); font-size:11px; font-family:"IBM Plex Mono",monospace; }
+  .flow-edge{ stroke:var(--border); stroke-width:1.5; }
+  .flow-edge.live{ stroke:var(--blue); stroke-width:2.5; }
+  @keyframes dash{ to{ stroke-dashoffset:-16; } }
+  .flow-edge.live{ stroke-dasharray:5 4; animation:dash .6s linear infinite; }
+  .modal-bg{ background:rgba(0,0,0,.55); }
+  .fade-in{ animation:fade .3s ease; } @keyframes fade{ from{opacity:0;transform:translateY(6px)} }
+  ::-webkit-scrollbar{ width:10px;height:10px } ::-webkit-scrollbar-thumb{ background:var(--border);border-radius:5px }
+</style>
+</head>
+<body class="min-h-screen">
+
+<!-- ===== Header ===== -->
+<header class="panel sticky top-0 z-30" style="border-left:0;border-right:0;border-top:0">
+  <div class="max-w-7xl mx-auto px-4 py-3 flex items-center gap-3 flex-wrap">
+    <div class="flex items-center gap-2">
+      <div class="accent-line" style="width:6px;height:34px"></div>
+      <div>
+        <div class="font-semibold text-lg leading-tight">FreshChain</div>
+        <div class="text-xs mono" style="color:var(--text-soft)">Grocery Event Streaming Console</div>
+      </div>
+    </div>
+    <div id="healthBadge" class="ml-2 text-xs mono px-2 py-1 rounded" style="background:var(--bg-alt)">● checking…</div>
+    <div class="flex-1"></div>
+    <!-- font size control -->
+    <div class="flex items-center gap-1 text-xs" title="Font size 14–36">
+      <span class="mono" style="color:var(--text-soft)">A</span>
+      <button onclick="bumpFont(-2)" class="btn-ghost px-2 py-1 rounded mono">−</button>
+      <span id="fontLabel" class="mono w-8 text-center">16</span>
+      <button onclick="bumpFont(2)" class="btn-ghost px-2 py-1 rounded mono">+</button>
+      <span class="mono text-base" style="color:var(--text-soft)">A</span>
+    </div>
+    <button onclick="toggleTheme()" id="themeBtn" class="btn-ghost px-3 py-1.5 rounded text-sm">◑ Dark</button>
+    <button onclick="openModal('about')" class="btn-ghost px-3 py-1.5 rounded text-sm">More details</button>
+  </div>
+</header>
+
+<!-- ===== KPI strip ===== -->
+<section class="max-w-7xl mx-auto px-4 pt-5">
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+    <div class="panel p-4 rounded"><div class="text-xs mono" style="color:var(--text-soft)">REVENUE</div><div id="kpiRev" class="text-2xl font-semibold mt-1">$0.00</div></div>
+    <div class="panel p-4 rounded"><div class="text-xs mono" style="color:var(--text-soft)">PROFIT</div><div id="kpiProfit" class="text-2xl font-semibold mt-1" style="color:var(--green)">$0.00</div></div>
+    <div class="panel p-4 rounded"><div class="text-xs mono" style="color:var(--text-soft)">MARGIN</div><div id="kpiMargin" class="text-2xl font-semibold mt-1">0%</div></div>
+    <div class="panel p-4 rounded"><div class="text-xs mono" style="color:var(--text-soft)">UNITS SOLD</div><div id="kpiUnits" class="text-2xl font-semibold mt-1">0</div></div>
+  </div>
+</section>
+
+<!-- ===== Tabs ===== -->
+<nav class="max-w-7xl mx-auto px-4 mt-5 border-b flex gap-1 overflow-x-auto" style="border-color:var(--border)">
+  <button class="tab active px-4 py-3 text-sm whitespace-nowrap" data-tab="actions" onclick="showTab('actions')">Actions</button>
+  <button class="tab px-4 py-3 text-sm whitespace-nowrap" data-tab="inventory" onclick="showTab('inventory')">Inventory & Shelf</button>
+  <button class="tab px-4 py-3 text-sm whitespace-nowrap" data-tab="charts" onclick="showTab('charts')">Charts</button>
+  <button class="tab px-4 py-3 text-sm whitespace-nowrap" data-tab="flow" onclick="showTab('flow')">Event Flow</button>
+  <button class="tab px-4 py-3 text-sm whitespace-nowrap" data-tab="ops" onclick="showTab('ops')">Ops & Tracking</button>
+</nav>
+
+<main class="max-w-7xl mx-auto px-4 py-6">
+
+<!-- ===== ACTIONS TAB ===== -->
+<section id="tab-actions" class="tabpane fade-in">
+  <div class="grid md:grid-cols-3 gap-4">
+    <!-- Sales -->
+    <div class="panel p-4 rounded">
+      <div class="flex items-center justify-between"><h3 class="font-semibold">Simulate Sale</h3><button class="text-xs btn-ghost px-2 py-0.5 rounded" onclick="openModal('sales')">?</button></div>
+      <p class="text-xs mt-1" style="color:var(--text-soft)">Publishes a <span class="mono">sale</span> event → drains inventory → owner profit rollup.</p>
+      <select id="saleSku" class="w-full mt-3 px-2 py-2 rounded text-sm"></select>
+      <div class="flex items-center gap-2 mt-2">
+        <input id="saleQty" type="number" min="1" value="2" class="w-20 px-2 py-2 rounded text-sm">
+        <button class="btn px-3 py-2 rounded text-sm flex-1" onclick="postSale()">Sell</button>
+      </div>
+      <button class="btn-ghost w-full mt-2 px-3 py-2 rounded text-sm" onclick="simulate()">▶ Simulate 12 random sales</button>
+    </div>
+    <!-- Employee / register -->
+    <div class="panel p-4 rounded">
+      <div class="flex items-center justify-between"><h3 class="font-semibold">Employee Check-in</h3><button class="text-xs btn-ghost px-2 py-0.5 rounded" onclick="openModal('employee')">?</button></div>
+      <p class="text-xs mt-1" style="color:var(--text-soft)">Gates the <span class="mono">register</span> for sales tracking by owner.</p>
+      <input id="empId" placeholder="Employee ID e.g. E01" class="w-full mt-3 px-2 py-2 rounded text-sm">
+      <input id="empName" placeholder="Name" class="w-full mt-2 px-2 py-2 rounded text-sm">
+      <div class="flex gap-2 mt-2">
+        <input id="empReg" type="number" min="1" value="1" placeholder="Reg #" class="w-20 px-2 py-2 rounded text-sm">
+        <button class="btn px-3 py-2 rounded text-sm flex-1" onclick="postEmployee('clock_in')">Clock in</button>
+        <button class="btn-ghost px-3 py-2 rounded text-sm" onclick="postEmployee('clock_out')">Out</button>
+      </div>
+    </div>
+    <!-- Shelf placement -->
+    <div class="panel p-4 rounded">
+      <div class="flex items-center justify-between"><h3 class="font-semibold">Shelf Placement</h3><button class="text-xs btn-ghost px-2 py-0.5 rounded" onclick="openModal('shelf')">?</button></div>
+      <p class="text-xs mt-1" style="color:var(--text-soft)">Reassign a product's physical <span class="mono">shelf</span> location code.</p>
+      <select id="shelfSku" class="w-full mt-3 px-2 py-2 rounded text-sm"></select>
+      <div class="flex gap-2 mt-2">
+        <input id="shelfLoc" placeholder="Aisle e.g. G3-D" class="flex-1 px-2 py-2 rounded text-sm">
+        <button class="btn px-3 py-2 rounded text-sm" onclick="postShelf()">Place</button>
+      </div>
+    </div>
+  </div>
+  <div id="toast" class="mt-4"></div>
+</section>
+
+<!-- ===== INVENTORY TAB ===== -->
+<section id="tab-inventory" class="tabpane hidden">
+  <div class="panel rounded overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead><tr class="text-left mono text-xs" style="color:var(--text-soft);border-bottom:1px solid var(--border)">
+        <th class="p-3">SKU</th><th class="p-3">Product</th><th class="p-3">Shelf</th><th class="p-3 text-right">Qty</th>
+        <th class="p-3 text-right">Sold</th><th class="p-3 text-right">Cost</th><th class="p-3 text-right">Price</th>
+        <th class="p-3 text-right">Unit Profit</th><th class="p-3">Status</th></tr></thead>
+      <tbody id="invBody"></tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ===== CHARTS TAB ===== -->
+<section id="tab-charts" class="tabpane hidden">
+  <div class="grid md:grid-cols-2 gap-4">
+    <div class="panel p-4 rounded">
+      <h3 class="font-semibold text-sm mb-1">Units Sold by Product</h3>
+      <svg id="barChart" viewBox="0 0 520 280" class="w-full"></svg>
+    </div>
+    <div class="panel p-4 rounded">
+      <h3 class="font-semibold text-sm mb-1">Profit Contribution</h3>
+      <svg id="donutChart" viewBox="0 0 520 280" class="w-full"></svg>
+    </div>
+    <div class="panel p-4 rounded md:col-span-2">
+      <h3 class="font-semibold text-sm mb-1">Inventory Level vs Reorder Point</h3>
+      <svg id="invChart" viewBox="0 0 1040 260" class="w-full"></svg>
+    </div>
+  </div>
+</section>
+
+<!-- ===== FLOW TAB ===== -->
+<section id="tab-flow" class="tabpane hidden">
+  <div class="panel p-4 rounded">
+    <h3 class="font-semibold text-sm mb-2">Domain Event Pipeline</h3>
+    <p class="text-xs mb-3" style="color:var(--text-soft)">Each box is a Kafka topic owned by a domain. Edges light up as messages traverse them.</p>
+    <svg id="flowSvg" viewBox="0 0 940 360" class="w-full"></svg>
+  </div>
+  <div class="panel rounded mt-4 p-4">
+    <h3 class="font-semibold text-sm mb-2">Live Message Trail</h3>
+    <div id="flowLog" class="mono text-xs space-y-1 max-h-64 overflow-y-auto"></div>
+  </div>
+</section>
+
+<!-- ===== OPS TAB ===== -->
+<section id="tab-ops" class="tabpane hidden">
+  <div class="grid md:grid-cols-3 gap-4">
+    <div class="panel p-4 rounded">
+      <h3 class="font-semibold text-sm mb-2">Employees on Register</h3>
+      <div id="empList" class="space-y-2 text-sm"></div>
+    </div>
+    <div class="panel p-4 rounded">
+      <h3 class="font-semibold text-sm mb-2">Pending Orders</h3>
+      <div id="orderList" class="space-y-2 text-sm"></div>
+    </div>
+    <div class="panel p-4 rounded">
+      <h3 class="font-semibold text-sm mb-2">Vendor Shipments (Logistics)</h3>
+      <div id="shipList" class="space-y-2 text-sm"></div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="max-w-7xl mx-auto px-4 py-6 text-xs mono" style="color:var(--text-soft)">
+  FreshChain demo · Apache Kafka 2-broker cluster · FastAPI · References:
+  <a class="underline" style="color:var(--blue)" href="https://kafka.apache.org/documentation/" target="_blank">Kafka docs</a> ·
+  <a class="underline" style="color:var(--blue)" href="https://carbondesignsystem.com/" target="_blank">IBM Carbon</a> ·
+  <a class="underline" style="color:var(--blue)" href="https://fastapi.tiangolo.com/" target="_blank">FastAPI</a>
+</footer>
+
+<!-- ===== Modal ===== -->
+<div id="modal" class="fixed inset-0 z-50 hidden items-center justify-center p-4 modal-bg" onclick="if(event.target===this)closeModal()">
+  <div class="panel rounded max-w-lg w-full p-5 fade-in">
+    <div class="flex items-start justify-between"><h3 id="modalTitle" class="font-semibold text-lg"></h3>
+      <button onclick="closeModal()" class="btn-ghost px-2 py-1 rounded">✕</button></div>
+    <div id="modalBody" class="mt-3 text-sm space-y-2" style="color:var(--text-soft)"></div>
+  </div>
+</div>
+
+<script>
+// ---------------- config ----------------
+const API = (location.port === '8000' || location.origin.includes('http')) ? '' : '';
+let state = null;
+
+// ---------------- theme & font ----------------
+function toggleTheme(){
+  const d = document.documentElement.getAttribute('data-theme')==='dark';
+  document.documentElement.setAttribute('data-theme', d?'light':'dark');
+  document.getElementById('themeBtn').textContent = d ? '◑ Dark' : '◐ Light';
+  if(state) renderCharts(); // recolor svgs
+}
+let fontPx = 16;
+function bumpFont(delta){
+  fontPx = Math.max(14, Math.min(36, fontPx + delta));
+  document.documentElement.style.fontSize = fontPx + 'px';
+  document.getElementById('fontLabel').textContent = fontPx;
+}
+
+// ---------------- tabs ----------------
+function showTab(name){
+  document.querySelectorAll('.tabpane').forEach(p=>p.classList.add('hidden'));
+  document.getElementById('tab-'+name).classList.remove('hidden');
+  document.getElementById('tab-'+name).classList.add('fade-in');
+  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.tab===name));
+  if(name==='charts') renderCharts();
+  if(name==='flow') renderFlow();
+}
+
+// ---------------- modal content ----------------
+const MODALS = {
+  about:{t:'About FreshChain', b:`<p>A demo of an event-driven grocery operation built on a 2-broker <b>Apache Kafka</b> cluster with a <b>FastAPI</b> gateway.</p>
+    <p>Eight domains each own a topic. A sale cascades through inventory, ordering, vendor, logistics and shelf placement automatically.</p>
+    <p>Refs: <a class="underline" style="color:var(--blue)" target="_blank" href="https://kafka.apache.org/documentation/#design">Kafka design</a>,
+    <a class="underline" style="color:var(--blue)" target="_blank" href="https://kafka.apache.org/documentation/#replication">replication & failover</a>.</p>`},
+  sales:{t:'Sales → Inventory', b:`<p>A <span class="mono">sale</span> event on <span class="mono">grocery.sales</span> decrements inventory, books revenue and profit, then emits a <span class="mono">stock_check</span>. If stock falls below the reorder point a <span class="mono">reorder_request</span> is published downstream.</p>`},
+  employee:{t:'Employee & Register', b:`<p>Clock-in/out events on <span class="mono">grocery.employee</span> record who controls each register, which the owner domain uses for sales attribution.</p>`},
+  shelf:{t:'Shelf Placement', b:`<p>Placement events on <span class="mono">grocery.shelf</span> update the physical aisle code. Deliveries auto-emit a placement when restocked.</p>`},
+};
+function openModal(k){ const m=MODALS[k]; document.getElementById('modalTitle').textContent=m.t;
+  document.getElementById('modalBody').innerHTML=m.b;
+  const md=document.getElementById('modal'); md.classList.remove('hidden'); md.classList.add('flex'); }
+function closeModal(){ const md=document.getElementById('modal'); md.classList.add('hidden'); md.classList.remove('flex'); }
+
+// ---------------- api helpers ----------------
+async function api(path, opts){ try{ const r=await fetch(API+path, opts); if(!r.ok){const e=await r.json().catch(()=>({detail:r.statusText})); throw new Error(e.detail||r.status);} return await r.json(); }catch(e){ toast('⚠ '+e.message, true); throw e; } }
+function toast(msg, err){ const t=document.getElementById('toast');
+  t.innerHTML=`<div class="panel rounded p-3 text-sm fade-in" style="border-left:4px solid ${err?'var(--red)':'var(--green)'}">${msg}</div>`;
+  setTimeout(()=>{t.innerHTML='';},3500); }
+
+async function postSale(){ const sku=document.getElementById('saleSku').value; const qty=+document.getElementById('saleQty').value||1;
+  await api('/api/sale',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sku,qty})});
+  toast(`Sold ${qty} × ${sku}`); refresh(); }
+async function postEmployee(action){ const employee_id=document.getElementById('empId').value||'E01';
+  const name=document.getElementById('empName').value||employee_id; const register=+document.getElementById('empReg').value||1;
+  await api('/api/employee',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({employee_id,name,role:'cashier',register_no:register,action})});
+  toast(`${employee_id} ${action.replace('_',' ')}`); refresh(); }
+async function postShelf(){ const sku=document.getElementById('shelfSku').value; const shelf=document.getElementById('shelfLoc').value||'A1-A';
+  await api('/api/shelf',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sku,shelf})});
+  toast(`${sku} → ${shelf}`); refresh(); }
+async function simulate(){ await api('/api/simulate?n=12',{method:'POST'}); toast('Simulated 12 sales'); setTimeout(refresh,400); }
+async function deliver(trace){ await api('/api/deliver',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({trace})}); toast('Delivered '+trace); setTimeout(refresh,300); }
+
+// ---------------- health ----------------
+async function checkHealth(){ try{ const h=await fetch(API+'/api/health').then(r=>r.json());
+  const b=document.getElementById('healthBadge'); const ok=h.kafka_connected;
+  b.textContent = ok? '● cluster healthy' : '● degraded — '+(h.last_error||'no broker');
+  b.style.color = ok? 'var(--green)':'var(--red)'; }catch(e){
+  const b=document.getElementById('healthBadge'); b.textContent='● API unreachable'; b.style.color='var(--red)'; } }
+
+// ---------------- render ----------------
+const css=v=>getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+function fillSelects(products){
+  const opts=products.map(p=>`<option value="${p.sku}">${p.sku} — ${p.name}</option>`).join('');
+  document.getElementById('saleSku').innerHTML=opts;
+  document.getElementById('shelfSku').innerHTML=opts;
+}
+async function loadCatalog(){ const c=await fetch(API+'/api/catalog').then(r=>r.json()); fillSelects(c.products); }
+
+async function refresh(){
+  try{ state = await fetch(API+'/api/state').then(r=>r.json()); }catch(e){ return; }
+  document.getElementById('kpiRev').textContent='$'+state.revenue.toFixed(2);
+  document.getElementById('kpiProfit').textContent='$'+state.profit.toFixed(2);
+  document.getElementById('kpiMargin').textContent=state.margin_pct+'%';
+  document.getElementById('kpiUnits').textContent=state.units_sold;
+  // inventory table
+  document.getElementById('invBody').innerHTML = state.products.map(p=>{
+    const cls=p.status==='OK'?'pill-ok':p.status==='LOW'?'pill-low':'pill-out';
+    return `<tr style="border-bottom:1px solid var(--border)">
+      <td class="p-3 mono">${p.sku}</td><td class="p-3">${p.name}</td>
+      <td class="p-3 mono">${p.shelf_current}</td><td class="p-3 text-right font-semibold">${p.qty}</td>
+      <td class="p-3 text-right">${p.sold}</td><td class="p-3 text-right">$${p.cost.toFixed(2)}</td>
+      <td class="p-3 text-right">$${p.price.toFixed(2)}</td><td class="p-3 text-right" style="color:var(--green)">$${p.unit_profit.toFixed(2)}</td>
+      <td class="p-3"><span class="px-2 py-0.5 rounded text-xs mono ${cls}">${p.status}</span></td></tr>`;
+  }).join('');
+  // ops
+  document.getElementById('empList').innerHTML = state.employees.length? state.employees.map(e=>
+    `<div class="flex justify-between"><span>${e.name} <span class="mono text-xs">#${e.register||'-'}</span></span><span class="mono text-xs" style="color:${e.status==='in'?'var(--green)':'var(--text-soft)'}">${e.status}</span></div>`).join('') : '<div class="text-xs" style="color:var(--text-soft)">none clocked in</div>';
+  document.getElementById('orderList').innerHTML = state.pending_orders.length? state.pending_orders.map(o=>
+    `<div class="flex justify-between"><span class="mono">${o.sku}</span><span class="text-xs">${o.qty}u · ${o.vendor}</span></div>`).join('') : '<div class="text-xs" style="color:var(--text-soft)">no open orders</div>';
+  document.getElementById('shipList').innerHTML = state.shipments.length? state.shipments.map(s=>
+    `<div class="flex justify-between items-center"><span class="mono text-xs">${s.trace} ${s.sku}</span><button class="btn px-2 py-0.5 rounded text-xs" onclick="deliver('${s.trace}')">deliver</button></div>`).join('') : '<div class="text-xs" style="color:var(--text-soft)">no shipments</div>';
+  // active tab visuals
+  if(!document.getElementById('tab-charts').classList.contains('hidden')) renderCharts();
+  if(!document.getElementById('tab-flow').classList.contains('hidden')) renderFlow();
+}
+
+// ---------------- SVG charts ----------------
+function renderCharts(){
+  if(!state) return;
+  const blue=css('--blue'), grid=css('--grid'), text=css('--text'), soft=css('--text-soft'), green=css('--green');
+  // BAR: units sold
+  const bs=state.products; const max=Math.max(1,...bs.map(p=>p.sold));
+  const bw=520/bs.length, pad=10;
+  let bar=`<line x1="40" y1="240" x2="510" y2="240" stroke="${grid}"/>`;
+  bs.forEach((p,i)=>{ const h=(p.sold/max)*190; const x=40+i*((470)/bs.length);
+    bar+=`<rect class="bar" x="${x}" y="${240-h}" width="${(470/bs.length)-10}" height="${h}" rx="2" fill="${blue}"/>`;
+    bar+=`<text x="${x+(470/bs.length-10)/2}" y="255" font-size="8" text-anchor="middle" fill="${soft}" font-family="IBM Plex Mono">${p.sku.split('-')[0]}</text>`;
+    bar+=`<text x="${x+(470/bs.length-10)/2}" y="${235-h}" font-size="9" text-anchor="middle" fill="${text}">${p.sold}</text>`; });
+  document.getElementById('barChart').innerHTML=bar;
+  // DONUT: profit contribution
+  const contrib=bs.map(p=>({sku:p.sku, v:p.sold*p.unit_profit})).filter(d=>d.v>0);
+  const tot=contrib.reduce((a,b)=>a+b.v,0)||1; let ang=-Math.PI/2; const cx=160,cy=140,r=90,ir=52;
+  const pal=[blue,green,css('--amber'),css('--red'),css('--blue-dark'),'#8a3ffc','#ff7eb6','#08bdba'];
+  let don=''; let legend=''; 
+  if(contrib.length===0){ don=`<text x="160" y="145" text-anchor="middle" fill="${soft}" font-size="12">no profit yet</text>`; }
+  contrib.forEach((d,i)=>{ const a2=ang+(d.v/tot)*2*Math.PI;
+    const x1=cx+r*Math.cos(ang),y1=cy+r*Math.sin(ang),x2=cx+r*Math.cos(a2),y2=cy+r*Math.sin(a2);
+    const xi1=cx+ir*Math.cos(a2),yi1=cy+ir*Math.sin(a2),xi2=cx+ir*Math.cos(ang),yi2=cy+ir*Math.sin(ang);
+    const large=(a2-ang)>Math.PI?1:0; const c=pal[i%pal.length];
+    don+=`<path d="M${x1} ${y1} A${r} ${r} 0 ${large} 1 ${x2} ${y2} L${xi1} ${yi1} A${ir} ${ir} 0 ${large} 0 ${xi2} ${yi2} Z" fill="${c}"/>`;
+    legend+=`<g transform="translate(330,${40+i*26})"><rect width="12" height="12" fill="${c}" rx="2"/><text x="20" y="11" font-size="11" fill="${text}" font-family="IBM Plex Mono">${d.sku} $${d.v.toFixed(0)}</text></g>`;
+    ang=a2; });
+  document.getElementById('donutChart').innerHTML=don+legend+`<text x="${cx}" y="${cy+5}" text-anchor="middle" fill="${text}" font-size="14" font-weight="600">$${tot.toFixed(0)}</text>`;
+  // INVENTORY level vs reorder (grouped)
+  const iw=1040/bs.length; const imax=Math.max(1,...bs.map(p=>Math.max(p.qty,p.reorder)));
+  let inv=`<line x1="40" y1="210" x2="1030" y2="210" stroke="${grid}"/>`;
+  bs.forEach((p,i)=>{ const x=40+i*((990)/bs.length); const w=(990/bs.length); 
+    const qh=(p.qty/imax)*170, rh=(p.reorder/imax)*170;
+    inv+=`<rect x="${x}" y="${210-qh}" width="${w*0.42}" height="${qh}" fill="${blue}" rx="2"/>`;
+    inv+=`<rect x="${x+w*0.46}" y="${210-rh}" width="${w*0.42}" height="${rh}" fill="${green}" opacity="0.55" rx="2"/>`;
+    inv+=`<text x="${x+w*0.44}" y="225" font-size="9" text-anchor="middle" fill="${soft}" font-family="IBM Plex Mono">${p.sku.split('-')[0]}</text>`; });
+  inv+=`<g transform="translate(40,20)"><rect width="12" height="12" fill="${blue}" rx="2"/><text x="18" y="11" font-size="11" fill="${text}">on hand</text>
+        <rect x="90" width="12" height="12" fill="${green}" opacity="0.55" rx="2"/><text x="108" y="11" font-size="11" fill="${text}">reorder point</text></g>`;
+  document.getElementById('invChart').innerHTML=inv;
+}
+
+// ---------------- flow diagram ----------------
+const NODES={Sales:[80,60],Inventory:[320,60],Ordering:[560,60],Vendor:[800,60],
+  Logistics:[800,240],Shelf:[560,240],Owner:[320,240],Employee:[80,240],Register:[80,150]};
+const EDGES=[['Sales','Inventory'],['Inventory','Ordering'],['Ordering','Vendor'],['Vendor','Logistics'],
+  ['Logistics','Shelf'],['Logistics','Inventory'],['Sales','Owner'],['Employee','Register']];
+function renderFlow(){
+  const text=css('--text'), border=css('--border'), panel=css('--panel');
+  const recent = state? new Set(state.flow.slice(-8).map(f=>f.from+'>'+f.to)) : new Set();
+  let svg='';
+  EDGES.forEach(([a,b])=>{ const [x1,y1]=NODES[a],[x2,y2]=NODES[b];
+    const live=recent.has(a+'>'+b)?'live':'';
+    svg+=`<line class="flow-edge ${live}" x1="${x1+55}" y1="${y1+18}" x2="${x2+55}" y2="${y2+18}" marker-end="url(#arrow)"/>`; });
+  Object.entries(NODES).forEach(([n,[x,y]])=>{
+    svg+=`<rect class="flow-node" x="${x}" y="${y}" width="110" height="36" rx="4"/>
+          <text class="flow-text" x="${x+55}" y="${y+22}" text-anchor="middle">${n}</text>`; });
+  document.getElementById('flowSvg').innerHTML=
+    `<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="${border}"/></marker></defs>`+svg;
+  // log
+  if(state){ document.getElementById('flowLog').innerHTML = [...state.flow].reverse().map(f=>
+    `<div><span style="color:var(--blue)">${f.from}→${f.to}</span> <span style="color:var(--text-soft)">${f.label}</span></div>`).join('') || '<div style="color:var(--text-soft)">no events yet — try a sale</div>'; }
+}
+
+// ---------------- boot ----------------
+(async function(){ await loadCatalog(); await refresh(); checkHealth();
+  setInterval(()=>{refresh();},2500); setInterval(checkHealth,5000); })();
+</script>
+</body>
+</html>
